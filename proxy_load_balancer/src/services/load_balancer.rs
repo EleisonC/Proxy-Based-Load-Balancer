@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{ops::DerefMut, str::FromStr};
 use tokio::net::TcpStream;
 use hyper::{body::Incoming, client::conn::http1::handshake, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
@@ -12,14 +12,11 @@ pub struct LoadBalancer {
 
 
 impl LoadBalancer {
-    pub fn new(worker_hosts: Vec<String>, strategy: LoadBalancingStrategyType) -> Result<Self, String> {
-        if worker_hosts.is_empty() {
-            return Err("No worker hosts provided".into());
-        }
-        Ok(LoadBalancer {
+    pub fn new(worker_hosts: Vec<String>, strategy: LoadBalancingStrategyType) -> Self {
+        LoadBalancer {
             worker_hosts,
             strategy
-        })
+        }
     }
 
     pub async fn forward_request(&mut self, req: Request<Incoming>) -> Result<Response<Incoming>, Box<dyn std::error::Error + Send + Sync>> {

@@ -1,6 +1,6 @@
-use proxy_load_balancer::{services::RoundRobinStrategy, Application};
+use proxy_load_balancer::{services::{RoundRobinStrategy, LoadBalancer}, Application};
 use tokio::sync::RwLock;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main () {
@@ -12,8 +12,9 @@ async fn main () {
     ];
 
     let strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
+    let app_load_balancer = Arc::new(RwLock::new(LoadBalancer::new(worker_hosts, strategy)));
 
-    let app = Application::build(address, worker_hosts, strategy).await.expect("Failed to build load balancer");
+    let app = Application::build(address, app_load_balancer).await.expect("Failed to build load balancer");
 
     app.run().await.expect("Failed to run Load balancer");
 }

@@ -5,9 +5,8 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
-use services::load_balancer::LoadBalancer;
 use tokio::net::TcpListener;
-use utils::LoadBalancingStrategyType;
+use utils::LoadBalancerType;
 
 
 pub mod services;
@@ -17,16 +16,14 @@ pub mod utils;
 pub struct Application {
     addr: SocketAddr,
     listener: TcpListener,
-    app_load_balancer: LoadBalancer
+    app_load_balancer: LoadBalancerType
 }
 
 impl Application {
-    pub async fn build(address: &str, worker_hosts: Vec<String>, strategy: LoadBalancingStrategyType) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub async fn build(address: &str, app_load_balancer: LoadBalancerType) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let addr = address.parse()?;
 
         let listener = TcpListener::bind(addr).await?;
-
-        let app_load_balancer = LoadBalancer::new(worker_hosts, strategy)?;
         
         let app_inst = Application {
             addr,
@@ -56,7 +53,7 @@ impl Application {
     }
 }
 
-async fn forward_to_load_balancer(req: Request<Incoming>, mut load_balancer: LoadBalancer,) -> Result<Response<Incoming>, Box<dyn std::error::Error + Send + Sync>> {
-    let response = load_balancer.forward_request(req).await?;
+async fn forward_to_load_balancer(req: Request<Incoming>, load_balancer: LoadBalancerType,) -> Result<Response<Incoming>, Box<dyn Error + Send + Sync>> {
+    let response = load_balancer.write().await.forward_request(req).await?;
     Ok(response)
 }

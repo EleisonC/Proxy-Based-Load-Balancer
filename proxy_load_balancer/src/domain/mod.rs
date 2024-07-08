@@ -1,3 +1,3 @@
-pub mod loadbalancer_strategy;
+pub mod custom_traits;
 
-pub use loadbalancer_strategy::*;
+pub use custom_traits::*;

@@ -1,8 +1,11 @@
-use std::{ops::DerefMut, str::FromStr};
+use std::str::FromStr;
 use tokio::net::TcpStream;
-use hyper::{body::Incoming, client::conn::http1::handshake, Request, Response, Uri};
+use hyper::{body::{Body, Incoming}, client::conn::http1::handshake, Request, Response, Uri};
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use serde::Deserialize;
 use hyper_util::rt::TokioIo;
-use crate::utils::LoadBalancingStrategyType;
+use crate::{domain::LoadBalancerError, utils::LoadBalancingStrategyType};
 
 #[derive(Clone)]
 pub struct LoadBalancer {
@@ -19,10 +22,11 @@ impl LoadBalancer {
         }
     }
 
-    pub async fn forward_request(&mut self, req: Request<Incoming>) -> Result<Response<Incoming>, Box<dyn std::error::Error + Send + Sync>> {
+    #[tracing::instrument(name = "Forward Request", skip_all, err(Debug))]
+    pub async fn forward_request(&mut self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
         let mut worker_uri = self.strategy.write().await.get_worker(self.worker_hosts.clone());
 
-
+        tracing::info!("Forwarding request on {}", worker_uri);
         if let Some(path_and_query) = req.uri().path_and_query() {
             worker_uri.push_str(path_and_query.as_str());
         }
@@ -34,15 +38,19 @@ impl LoadBalancer {
 
         let address = format!("{}:{}", host, port);
 
-        let stream = TcpStream::connect(address).await?;
+        let stream = TcpStream::connect(address).await.map_err(|err|
+            LoadBalancerError::UnexpectedError(err.into())
+        )?;
 
         let io = TokioIo::new(stream);
 
-        let (mut sender, conn) = handshake(io).await?;
+        let (mut sender, conn) = handshake(io).await.map_err(|err|
+            LoadBalancerError::UnexpectedError(err.into())
+        )?;
 
         tokio::task::spawn( async move {
             if let Err(err) = conn.await {
-                eprintln!("Error serving connection: {:?}", err);
+                eprintln!("Error forwarding connection: {:?}", err);
             }
         });
 
@@ -61,21 +69,29 @@ impl LoadBalancer {
             new_req.headers_mut().insert(key, value.clone());
         }
 
-        let res = sender.send_request(new_req).await?;
+        let res = sender.send_request(new_req).await.map_err(|err| LoadBalancerError::UnexpectedError(err.into()))?;
 
         let res_headers = res.headers().clone();
 
+        let res_status = res.status();
+
+        let res_version = res.version();
+
+        // Create a Full<Bytes> from the collected bytes
+        let body = res.collect().await.map_err(|err| LoadBalancerError::UnexpectedError(err.into()))?;
+
         let mut res_data = Response::builder()
-            .status(res.status())
-            .version(res.version())
-            .body(res.into_body())
+            .status(res_status)
+            .version(res_version)
+            .body(Full::new(body.to_bytes()))
             .expect("response builder");
 
         for (key, value) in res_headers.iter() {
             res_data.headers_mut().insert(key, value.clone());
         }
-        println!("\n\nDone!");
 
+        
+        tracing::info!("Successfully forwarded the request. Done!!");
         Ok(res_data)
     }
 }

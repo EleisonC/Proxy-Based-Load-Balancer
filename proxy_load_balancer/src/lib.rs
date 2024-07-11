@@ -34,7 +34,7 @@ impl Application {
     }
 
     pub async fn run(self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        println!("Listening on http://{}", self.addr);
+        tracing::info!("Listening on http://{}", self.addr);
 
         loop {
             let (stream, _) = self.listener.accept().await?;

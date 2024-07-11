@@ -10,3 +10,8 @@ hyper = { version = "1", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
+thiserror = "1.0.58"
+color-eyre = "0.6.3"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["registry", "env-filter"] }
+tracing-error = "0.2.0"

@@ -1,9 +1,10 @@
-use proxy_load_balancer::{services::{RoundRobinStrategy, LoadBalancer}, Application};
+use proxy_load_balancer::{services::{LoadBalancer, RoundRobinStrategy}, utils::init_tracing, Application};
 use tokio::sync::RwLock;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main () {
+    init_tracing().expect("Tracing failed to start");
     let address = "127.0.0.1:4000";
 
     let worker_hosts = vec![

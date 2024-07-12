@@ -1,4 +1,4 @@
-use proxy_load_balancer::{services::{LoadBalancer, RoundRobinStrategy}, utils::init_tracing, Application};
+use proxy_load_balancer::{domain::ServerType, services::{LoadBalancer, RoundRobinStrategy}, utils::init_tracing, Application};
 use tokio::sync::RwLock;
 use std::sync::Arc;
 
@@ -8,8 +8,10 @@ async fn main () {
     let address = "127.0.0.1:4000";
 
     let worker_hosts = vec![
-        "http://localhost:3000".to_string(),
-        "http://localhost:3001".to_string(),
+        ServerType::new("Server 0".to_string(), "http://localhost:3000".to_string()),
+        ServerType::new("Server 1".to_string(), "http://localhost:3001".to_string()),
+        ServerType::new("Server 2".to_string(), "http://localhost:3002".to_string()),
+        ServerType::new("Server 3".to_string(), "http://localhost:3003".to_string()),
     ];
 
     let strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));

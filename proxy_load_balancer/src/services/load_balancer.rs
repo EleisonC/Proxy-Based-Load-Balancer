@@ -5,17 +5,17 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use serde::Deserialize;
 use hyper_util::rt::TokioIo;
-use crate::{domain::LoadBalancerError, utils::LoadBalancingStrategyType};
+use crate::{domain::{LoadBalancerError, ServerType}, utils::{LoadBalancingStrategyType, WokerHostType}};
 
 #[derive(Clone)]
 pub struct LoadBalancer {
-    worker_hosts: Vec<String>,
+    worker_hosts: Vec<WokerHostType>,
     strategy: LoadBalancingStrategyType
 }
 
 
 impl LoadBalancer {
-    pub fn new(worker_hosts: Vec<String>, strategy: LoadBalancingStrategyType) -> Self {
+    pub fn new(worker_hosts: Vec<WokerHostType>, strategy: LoadBalancingStrategyType) -> Self {
         LoadBalancer {
             worker_hosts,
             strategy

@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 
 use color_eyre::eyre::Context;
 use domain::LoadBalancerError;
-use http_body_util::{Full, BodyExt};
+use http_body_util::Full;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::StatusCode;
 use serde_json::json;
-use hyper::{Request, Response, body::{Incoming, Body}};
+use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use utils::LoadBalancerType;

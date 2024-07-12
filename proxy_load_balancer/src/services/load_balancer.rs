@@ -1,11 +1,12 @@
 use std::str::FromStr;
 use tokio::net::TcpStream;
-use hyper::{body::{Body, Incoming}, client::conn::http1::handshake, Request, Response, Uri};
+use hyper::{body::Incoming,
+    client::conn::http1::handshake, Request, Response, Uri};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
-use serde::Deserialize;
 use hyper_util::rt::TokioIo;
-use crate::{domain::{LoadBalancerError, ServerType}, utils::{LoadBalancingStrategyType, WokerHostType}};
+use crate::{domain::LoadBalancerError,
+    utils::{LoadBalancingStrategyType, WokerHostType}};
 
 #[derive(Clone)]
 pub struct LoadBalancer {
@@ -24,9 +25,12 @@ impl LoadBalancer {
 
     #[tracing::instrument(name = "Forward Request", skip_all, err(Debug))]
     pub async fn forward_request(&mut self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
-        let mut worker_uri = self.strategy.write().await.get_worker(self.worker_hosts.clone());
+        let worker = self.strategy.write().await.get_worker(self.worker_hosts.clone()).clone();
 
-        tracing::info!("Forwarding request on {}", worker_uri);
+        let worker_name = worker.lock().unwrap().name.clone();
+        let mut worker_uri = worker.lock().unwrap().address_ip.clone();
+
+        tracing::info!("Forwarding request on {}", worker_name);
         if let Some(path_and_query) = req.uri().path_and_query() {
             worker_uri.push_str(path_and_query.as_str());
         }
@@ -69,6 +73,11 @@ impl LoadBalancer {
             new_req.headers_mut().insert(key, value.clone());
         }
 
+        worker.lock().unwrap().add_connection();
+        defer! {
+            worker.lock().unwrap().remove_connection()
+        }
+
         let res = sender.send_request(new_req).await.map_err(|err| LoadBalancerError::UnexpectedError(err.into()))?;
 
         let res_headers = res.headers().clone();
@@ -89,7 +98,6 @@ impl LoadBalancer {
         for (key, value) in res_headers.iter() {
             res_data.headers_mut().insert(key, value.clone());
         }
-
         
         tracing::info!("Successfully forwarded the request. Done!!");
         Ok(res_data)

@@ -1,4 +1,4 @@
-use proxy_load_balancer::{domain::ServerType, services::{LoadBalancer, RoundRobinStrategy}, utils::init_tracing, Application};
+use proxy_load_balancer::{domain::ServerType, services::{LeastConnectionsStrategy, LoadBalancer, RoundRobinStrategy}, utils::init_tracing, Application};
 use tokio::sync::RwLock;
 use std::sync::Arc;
 
@@ -15,7 +15,8 @@ async fn main () {
     ];
 
     let strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
-    let app_load_balancer = Arc::new(RwLock::new(LoadBalancer::new(worker_hosts, strategy)));
+    let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
+    let app_load_balancer = Arc::new(RwLock::new(LoadBalancer::new(worker_hosts, least_strategy)));
 
     let app = Application::build(address, app_load_balancer).await.expect("Failed to build load balancer");
 

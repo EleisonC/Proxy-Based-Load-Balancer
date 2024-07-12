@@ -1,3 +1,5 @@
+#[macro_use(defer)] extern crate scopeguard;
+
 use std::error::Error;
 use std::net::SocketAddr;
 

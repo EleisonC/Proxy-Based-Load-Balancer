@@ -14,9 +14,8 @@ async fn main () {
         ServerType::new("Server 3".to_string(), "http://localhost:3003".to_string()),
     ];
 
-    let strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
-    let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
-    let app_load_balancer = Arc::new(RwLock::new(LoadBalancer::new(worker_hosts, least_strategy)));
+    let init_strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
+    let app_load_balancer = Arc::new(RwLock::new(LoadBalancer::new(worker_hosts, init_strategy)));
 
     let app = Application::build(address, app_load_balancer).await.expect("Failed to build load balancer");
 

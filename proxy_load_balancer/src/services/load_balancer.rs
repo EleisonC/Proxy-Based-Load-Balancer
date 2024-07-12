@@ -1,5 +1,5 @@
-use std::str::FromStr;
-use tokio::net::TcpStream;
+use std::{str::FromStr, sync::Arc};
+use tokio::{net::TcpStream, sync::RwLock};
 use hyper::{body::Incoming,
     client::conn::http1::handshake, Request, Response, Uri};
 use http_body_util::{BodyExt, Full};
@@ -7,6 +7,8 @@ use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use crate::{domain::LoadBalancerError,
     utils::{LoadBalancingStrategyType, WokerHostType}};
+
+use super::{LeastConnectionsStrategy, RoundRobinStrategy};
 
 #[derive(Clone)]
 pub struct LoadBalancer {
@@ -31,6 +33,11 @@ impl LoadBalancer {
         let mut worker_uri = worker.lock().unwrap().address_ip.clone();
 
         tracing::info!("Forwarding request on {}", worker_name);
+        worker.lock().unwrap().add_connection();
+        defer! {
+            worker.lock().unwrap().remove_connection()
+        }
+        
         if let Some(path_and_query) = req.uri().path_and_query() {
             worker_uri.push_str(path_and_query.as_str());
         }
@@ -73,11 +80,6 @@ impl LoadBalancer {
             new_req.headers_mut().insert(key, value.clone());
         }
 
-        worker.lock().unwrap().add_connection();
-        defer! {
-            worker.lock().unwrap().remove_connection()
-        }
-
         let res = sender.send_request(new_req).await.map_err(|err| LoadBalancerError::UnexpectedError(err.into()))?;
 
         let res_headers = res.headers().clone();
@@ -101,5 +103,17 @@ impl LoadBalancer {
         
         tracing::info!("Successfully forwarded the request. Done!!");
         Ok(res_data)
+    }
+
+    #[tracing::instrument(name = "Monitor and switch strategy", skip_all)]
+    pub fn monitor_and_switch(&mut self) {
+       if self.is_high_load() {
+            let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
+            self.strategy = least_strategy;
+            tracing::info!("Switching to Least Connections strategy");
+       }
+    }
+    pub fn is_high_load(&self) -> bool {
+        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections > 5)
     }
 }

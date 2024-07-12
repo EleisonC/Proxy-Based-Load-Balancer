@@ -63,7 +63,9 @@ impl Application {
 
 #[tracing::instrument(name = "Forward to load balancer", skip_all, err(Debug))]
 async fn forward_to_load_balancer(req: Request<Incoming>, load_balancer: LoadBalancerType,) -> Result<Response<Full<Bytes>>, Box<dyn Error + Send + Sync>> {
-    let response = match load_balancer.write().await.forward_request(req).await {
+    let mut lb = load_balancer.write().await; 
+    lb.monitor_and_switch();
+    let response = match lb.forward_request(req).await {
         Ok(res) => Ok(res),
         Err(_) => {
             let error_message = json!({

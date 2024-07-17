@@ -13,7 +13,7 @@ use super::{LeastConnectionsStrategy, RoundRobinStrategy};
 #[derive(Clone)]
 pub struct LoadBalancer {
     worker_hosts: Vec<WokerHostType>,
-    strategy: LoadBalancingStrategyType
+    pub strategy: LoadBalancingStrategyType,
 }
 
 
@@ -21,19 +21,21 @@ impl LoadBalancer {
     pub fn new(worker_hosts: Vec<WokerHostType>, strategy: LoadBalancingStrategyType) -> Self {
         LoadBalancer {
             worker_hosts,
-            strategy
+            strategy,
         }
     }
 
     #[tracing::instrument(name = "Forward Request", skip_all, err(Debug))]
-    pub async fn forward_request(&mut self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
-        let worker = self.strategy.write().await.get_worker(self.worker_hosts.clone()).clone();
+    pub async fn forward_request(&self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
+        let worker = { self.strategy.write().await.get_worker(self.worker_hosts.clone()).clone() };
 
-        let worker_name = worker.lock().unwrap().name.clone();
-        let mut worker_uri = worker.lock().unwrap().address_ip.clone();
+        let worker_name = { worker.lock().unwrap().name.clone() };
+        let mut worker_uri = { worker.lock().unwrap().address_ip.clone() };
 
         tracing::info!("Forwarding request on {}", worker_name);
-        worker.lock().unwrap().add_connection();
+        {
+            worker.lock().unwrap().add_connection() 
+        }
         defer! {
             worker.lock().unwrap().remove_connection()
         }
@@ -102,18 +104,20 @@ impl LoadBalancer {
         }
         
         tracing::info!("Successfully forwarded the request. Done!!");
+        let number = { worker.lock().unwrap().active_connections };
+        println!("{worker_name}***has**{number}***Connections***");
         Ok(res_data)
     }
 
     #[tracing::instrument(name = "Monitor and switch strategy", skip_all)]
-    pub fn monitor_and_switch(&mut self) {
-       if self.is_high_load() {
+    pub async fn monitor_and_switch(&mut self) {
+       if self.is_high_load(){
             let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
             self.strategy = least_strategy;
             tracing::info!("Switching to Least Connections strategy");
        }
     }
     pub fn is_high_load(&self) -> bool {
-        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections > 5)
+        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections >= 2)
     }
 }

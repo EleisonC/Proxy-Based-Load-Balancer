@@ -22,6 +22,9 @@ impl LoadBalancingStrategy for RoundRobinStrategy {
 
         worker.clone()
     }
+    fn current_strategy(&self) -> &str {
+        "Round Robin Strategy"
+    }
 }
 
 

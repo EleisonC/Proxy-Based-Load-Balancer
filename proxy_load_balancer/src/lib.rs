@@ -1,9 +1,9 @@
 #[macro_use(defer)] extern crate scopeguard;
 
-use std::error::Error;
+use std::{error::Error, ops::Deref};
 use std::net::SocketAddr;
 
-use color_eyre::eyre::Context;
+// use color_eyre::eyre::Context;
 use domain::LoadBalancerError;
 use http_body_util::Full;
 use hyper::server::conn::http1;
@@ -48,11 +48,10 @@ impl Application {
             let (stream, _) = self.listener.accept().await.map_err(|err| LoadBalancerError::UnexpectedError(err.into()))?;
             let io_stream = TokioIo::new(stream);
             let load_balancer = self.app_load_balancer.clone();
-            let io = http1::Builder::new().serve_connection(io_stream, service_fn(move |req| {
-                forward_to_load_balancer(req, load_balancer.clone())
-            }));
-
             tokio::task::spawn(async move {
+                let io = http1::Builder::new().serve_connection(io_stream, service_fn(move |req| {
+                    forward_to_load_balancer(req, load_balancer.clone())
+                }));
                 if let Err(err) = io.await {
                     eprintln!("Error serving connection: {:?}", err);
                 }
@@ -63,9 +62,14 @@ impl Application {
 
 #[tracing::instrument(name = "Forward to load balancer", skip_all, err(Debug))]
 async fn forward_to_load_balancer(req: Request<Incoming>, load_balancer: LoadBalancerType,) -> Result<Response<Full<Bytes>>, Box<dyn Error + Send + Sync>> {
-    let mut lb = load_balancer.write().await; 
-    lb.monitor_and_switch();
-    let response = match lb.forward_request(req).await {
+    println!("We are not locking anymore");
+    let lb = load_balancer.read().await.forward_request(req).await;
+    // .read().await.forward_request(req).await?;
+    // let checkstrategy = lb.strategy.write().await.current_strategy() == "Least Connections Strategy";
+    // if !checkstrategy {
+    //     lb.monitor_and_switch().await;
+    // }
+    let response = match lb {
         Ok(res) => Ok(res),
         Err(_) => {
             let error_message = json!({

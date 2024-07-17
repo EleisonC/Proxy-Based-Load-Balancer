@@ -12,4 +12,7 @@ impl LoadBalancingStrategy for LeastConnectionsStrategy {
 
         worker.clone()
     }
+    fn current_strategy(&self) -> &str {
+        "Least Connections Strategy"
+    }
 }

@@ -63,7 +63,7 @@ impl Application {
 #[tracing::instrument(name = "Forward to load balancer", skip_all, err(Debug))]
 async fn forward_to_load_balancer(req: Request<Incoming>, load_balancer: LoadBalancerType,) -> Result<Response<Full<Bytes>>, Box<dyn Error + Send + Sync>> {
     println!("We are not locking anymore");
-    let lb = load_balancer.read().await.forward_request(req).await;
+    let lb = {load_balancer.read().await.forward_request(req).await};
     // .read().await.forward_request(req).await?;
     // let checkstrategy = lb.strategy.write().await.current_strategy() == "Least Connections Strategy";
     // if !checkstrategy {

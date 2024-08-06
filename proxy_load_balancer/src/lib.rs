@@ -61,31 +61,41 @@ impl Application {
 }
 
 #[tracing::instrument(name = "Forward to load balancer", skip_all, err(Debug))]
-async fn forward_to_load_balancer(req: Request<Incoming>, load_balancer: LoadBalancerType,) -> Result<Response<Full<Bytes>>, Box<dyn Error + Send + Sync>> {
-    println!("We are not locking anymore");
-    let lb = {load_balancer.read().await.forward_request(req).await};
-    // .read().await.forward_request(req).await?;
-    // let checkstrategy = lb.strategy.write().await.current_strategy() == "Least Connections Strategy";
-    // if !checkstrategy {
-    //     lb.monitor_and_switch().await;
-    // }
-    let response = match lb {
-        Ok(res) => Ok(res),
-        Err(_) => {
-            let error_message = json!({
-                "error": "Internal Server Error",
-            }).to_string();
-            let error_body = Full::new(Bytes::from(error_message));
-            // convert the error into an incoming
-            // let error_message = Body::(error_message.to_string());
-            let error_response = Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "application/json")
-                .body(error_body)
-                .expect("Failed");
+async fn forward_to_load_balancer(req: Request<Incoming>, 
+    load_balancer: LoadBalancerType,) 
+    -> Result<Response<Full<Bytes>>, Box<dyn Error + Send + Sync>> {
+    match req.uri().path() {
+        "/switch-strategy" => {
+            println!("Is this happening");
+            {load_balancer.write().await.monitor_and_switch().await};
+            Ok(Response::builder()
+               .status(StatusCode::OK)
+               .body("Strategy switched successfully".into())
+               .expect("Failed to create response"))
+        },
+        _ => {
+            let lb = {load_balancer.read().await.forward_request(req).await};
 
-           Ok(error_response)
+            let response = match lb {
+                Ok(res) => Ok(res),
+                Err(_) => {
+                    let error_message = json!({
+                        "error": "Internal Server Error",
+                    }).to_string();
+                    let error_body = Full::new(Bytes::from(error_message));
+                    // convert the error into an incoming
+                    // let error_message = Body::(error_message.to_string());
+                    let error_response = Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header("Content-Type", "application/json")
+                        .body(error_body)
+                        .expect("Failed");
+
+                Ok(error_response)
+                }
+            };
+            response
         }
-    };
-    response
+    }
+    
 }

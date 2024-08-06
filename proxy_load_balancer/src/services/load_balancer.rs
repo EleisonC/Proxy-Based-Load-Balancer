@@ -111,13 +111,19 @@ impl LoadBalancer {
 
     #[tracing::instrument(name = "Monitor and switch strategy", skip_all)]
     pub async fn monitor_and_switch(&mut self) {
-       if self.is_high_load(){
-            let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
-            self.strategy = least_strategy;
-            tracing::info!("Switching to Least Connections strategy");
-       }
+        let current_strategy = {self.strategy.read().await.current_strategy().to_owned()};
+
+        if self.is_high_load() && current_strategy == "Round Robin Strategy" {
+                let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
+                self.strategy = least_strategy;
+                tracing::info!("Switching to Least Connections strategy");
+        } else if current_strategy == "Least Connections Strategy" {
+                let round_robin = Arc::new(RwLock::new(RoundRobinStrategy::new()));
+                self.strategy = round_robin;
+                tracing::info!("Switching to Round Robin Strategy");
+        }
     }
     pub fn is_high_load(&self) -> bool {
-        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections >= 2)
+        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections < 1)
     }
 }

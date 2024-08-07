@@ -1,6 +1,7 @@
 #[macro_use(defer)] extern crate scopeguard;
 
-use std::{error::Error, ops::Deref};
+use std::sync::Arc;
+use std::error::Error;
 use std::net::SocketAddr;
 
 // use color_eyre::eyre::Context;
@@ -13,7 +14,8 @@ use serde_json::json;
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
-use utils::LoadBalancerType;
+use tokio::sync::Mutex;
+use utils::{LoadBalancerType, SwitchLockType};
 use hyper::body::Bytes;
 
 
@@ -24,7 +26,8 @@ pub mod utils;
 pub struct Application {
     addr: SocketAddr,
     listener: TcpListener,
-    app_load_balancer: LoadBalancerType
+    app_load_balancer: LoadBalancerType,
+    switch_lock: SwitchLockType,
 }
 
 impl Application {
@@ -32,11 +35,13 @@ impl Application {
         let addr = address.parse()?;
 
         let listener = TcpListener::bind(addr).await?;
+        let switch_lock = Arc::new(Mutex::new(()));
         
         let app_inst = Application {
             addr,
             listener,
-            app_load_balancer
+            app_load_balancer,
+            switch_lock
         };
         Ok(app_inst)
     }
@@ -48,9 +53,10 @@ impl Application {
             let (stream, _) = self.listener.accept().await.map_err(|err| LoadBalancerError::UnexpectedError(err.into()))?;
             let io_stream = TokioIo::new(stream);
             let load_balancer = self.app_load_balancer.clone();
+            let switch_lock = self.switch_lock.clone();
             tokio::task::spawn(async move {
                 let io = http1::Builder::new().serve_connection(io_stream, service_fn(move |req| {
-                    forward_to_load_balancer(req, load_balancer.clone())
+                    forward_to_load_balancer(req, load_balancer.clone(), switch_lock.clone())
                 }));
                 if let Err(err) = io.await {
                     eprintln!("Error serving connection: {:?}", err);
@@ -61,13 +67,18 @@ impl Application {
 }
 
 #[tracing::instrument(name = "Forward to load balancer", skip_all, err(Debug))]
-async fn forward_to_load_balancer(req: Request<Incoming>, 
-    load_balancer: LoadBalancerType,) 
+async fn forward_to_load_balancer(
+    req: Request<Incoming>, 
+    load_balancer: LoadBalancerType,
+    switch_lock: SwitchLockType,  // this should be an Arc<Mutex<()>> not Arc<RwLock<()>> to prevent race conditions
+) 
     -> Result<Response<Full<Bytes>>, Box<dyn Error + Send + Sync>> {
     match req.uri().path() {
         "/switch-strategy" => {
-            println!("Is this happening");
-            {load_balancer.write().await.monitor_and_switch().await};
+            println!("Switch is happening");
+            let _switch_guard = switch_lock.lock().await;
+            let mut lb = load_balancer.write().await;
+            lb.monitor_and_switch().await;
             Ok(Response::builder()
                .status(StatusCode::OK)
                .body("Strategy switched successfully".into())

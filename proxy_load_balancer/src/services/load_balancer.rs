@@ -5,7 +5,8 @@ use hyper::{body::Incoming,
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
-use crate::{domain::LoadBalancerError,
+use crate::{
+    domain::LoadBalancerError, services::ConnectionGuard, 
     utils::{LoadBalancingStrategyType, WokerHostType}};
 
 use super::{LeastConnectionsStrategy, RoundRobinStrategy};
@@ -29,16 +30,14 @@ impl LoadBalancer {
     pub async fn forward_request(&self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
         let worker = { self.strategy.write().await.get_worker(self.worker_hosts.clone()).clone() };
 
-        let worker_name = { worker.lock().unwrap().name.clone() };
-        let mut worker_uri = { worker.lock().unwrap().address_ip.clone() };
+        let (worker_name, mut worker_uri) = {
+            let worker_guard = worker.lock().await;
+            (worker_guard.name.clone(), worker_guard.address_ip.clone())
+        };
 
         tracing::info!("Forwarding request on {}", worker_name);
-        {
-            worker.lock().unwrap().add_connection() 
-        }
-        defer! {
-            worker.lock().unwrap().remove_connection()
-        }
+        
+        let _guard = ConnectionGuard::new(&worker).await;
         
         if let Some(path_and_query) = req.uri().path_and_query() {
             worker_uri.push_str(path_and_query.as_str());
@@ -104,16 +103,16 @@ impl LoadBalancer {
         }
         
         tracing::info!("Successfully forwarded the request. Done!!");
-        let number = { worker.lock().unwrap().active_connections };
-        println!("{worker_name}***has**{number}***Connections***");
         Ok(res_data)
     }
 
     #[tracing::instrument(name = "Monitor and switch strategy", skip_all)]
     pub async fn monitor_and_switch(&mut self) {
-        let current_strategy = {self.strategy.read().await.current_strategy().to_owned()};
-
-        if self.is_high_load() && current_strategy == "Round Robin Strategy" {
+        let current_strategy = { 
+            self.strategy.read().await.current_strategy().to_owned()
+        };
+        let high_load = self.is_high_load().await;
+        if high_load && current_strategy == "Round Robin Strategy" {
                 let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
                 self.strategy = least_strategy;
                 tracing::info!("Switching to Least Connections strategy");
@@ -123,7 +122,13 @@ impl LoadBalancer {
                 tracing::info!("Switching to Round Robin Strategy");
         }
     }
-    pub fn is_high_load(&self) -> bool {
-        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections < 1)
+    pub async fn is_high_load(&self) -> bool {
+        let results = futures::future::join_all(
+            self.worker_hosts.iter().map(|worker| async {
+                let worker_guard = worker.lock().await;
+                worker_guard.active_connections >= 1
+            })
+        ).await;
+        results.into_iter().all(|result| result)
     }
 }

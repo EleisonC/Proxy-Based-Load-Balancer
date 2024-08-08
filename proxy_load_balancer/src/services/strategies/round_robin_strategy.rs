@@ -1,26 +1,24 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::{domain::LoadBalancingStrategy, utils::WokerHostType};
 
 pub struct RoundRobinStrategy {
-    current_worker: usize
+    current_worker: AtomicUsize
 }
 
 impl RoundRobinStrategy {
     pub fn new() -> Self {
         RoundRobinStrategy {
-            current_worker: 0
+            current_worker: AtomicUsize::new(0)
         }
     }
 }
 
+#[async_trait::async_trait]
 impl LoadBalancingStrategy for RoundRobinStrategy {
     #[tracing::instrument(name = "Get Worker via Round Robin Strategy", skip_all )]
-    fn get_worker(&mut self, worker_hosts: Vec<WokerHostType>) -> WokerHostType {
-        let worker = worker_hosts.get(self.current_worker).unwrap();
-        self.current_worker = (self.current_worker + 1) % worker_hosts.len();
-
-        // let server_address = worker.lock().unwrap().address_ip.clone();
-
-        worker.clone()
+    async fn get_worker(&self, worker_hosts: Vec<WokerHostType>) -> WokerHostType {
+        let current_index = self.current_worker.fetch_add(1, Ordering::SeqCst) % worker_hosts.len();
+        worker_hosts.get(current_index).unwrap().clone()
     }
     fn current_strategy(&self) -> &str {
         "Round Robin Strategy"

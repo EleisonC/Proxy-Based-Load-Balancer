@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::{atomic::Ordering, Arc}};
 use tokio::{net::TcpStream, sync::RwLock};
 use hyper::{body::Incoming,
     client::conn::http1::handshake, Request, Response, Uri};
@@ -7,7 +7,7 @@ use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use crate::{
     domain::LoadBalancerError, services::ConnectionGuard, 
-    utils::{LoadBalancingStrategyType, WokerHostType}};
+    utils::{LoadBalancingStrategyType, NotifyType, SwitchFlagType, WokerHostType}};
 
 use super::{LeastConnectionsStrategy, RoundRobinStrategy};
 
@@ -27,11 +27,20 @@ impl LoadBalancer {
     }
 
     #[tracing::instrument(name = "Forward Request", skip_all, err(Debug))]
-    pub async fn forward_request(&self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
-        let worker = { self.strategy.write().await.get_worker(self.worker_hosts.clone()).clone() };
+    pub async fn forward_request(&self,
+        req: Request<Incoming>,
+        switch_flag: SwitchFlagType,
+        notify: NotifyType
+    ) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
+
+        while switch_flag.load(Ordering::SeqCst) {
+            notify.notified().await;
+        }
+        
+        let worker = { self.strategy.read().await.get_worker(self.worker_hosts.clone()).await.clone() };
 
         let (worker_name, mut worker_uri) = {
-            let worker_guard = worker.lock().await;
+            let worker_guard = worker.read().await;
             (worker_guard.name.clone(), worker_guard.address_ip.clone())
         };
 
@@ -112,6 +121,7 @@ impl LoadBalancer {
             self.strategy.read().await.current_strategy().to_owned()
         };
         let high_load = self.is_high_load().await;
+        println!("Does my code even get here  what is my load -> {high_load}");
         if high_load && current_strategy == "Round Robin Strategy" {
                 let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
                 self.strategy = least_strategy;
@@ -125,10 +135,11 @@ impl LoadBalancer {
     pub async fn is_high_load(&self) -> bool {
         let results = futures::future::join_all(
             self.worker_hosts.iter().map(|worker| async {
-                let worker_guard = worker.lock().await;
-                worker_guard.active_connections >= 1
+                let worker_guard = worker.read().await;
+                println!("number of connections here {}", worker_guard.active_connection_count());
+                worker_guard.active_connection_count() > 5
             })
         ).await;
-        results.into_iter().all(|result| result)
+        results.into_iter().any(|result| result)
     }
 }

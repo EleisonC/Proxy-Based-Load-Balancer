@@ -4,23 +4,21 @@ use crate::{domain::LoadBalancingStrategy,
 #[derive(Default)]
 pub struct LeastConnectionsStrategy;
 
+#[async_trait::async_trait]
 impl LoadBalancingStrategy for LeastConnectionsStrategy {
-    fn get_worker(&mut self, worker_hosts: Vec<WokerHostType>) -> WokerHostType {
-        // let worker = worker_hosts.iter()
-        //     .min_by_key(|server| server.lock().unwrap().active_connections)
-        //     .expect("should have a server");
+    async fn get_worker(&self, worker_hosts: Vec<WokerHostType>) -> WokerHostType {
+        let mut min_connections = usize::MAX;
+        let mut least_connected_worker: Option<WokerHostType> = None;
 
-        // worker.clone()
-
-        let worker = futures::future::join_all(
-            worker_hosts.iter().min_by_key(|worker| async {
-                let worker_guard = worker.lock().await;
-                worker_guard.active_connections
-            })
-        ).await;
-
-        
-    }
+        for worker_host in worker_hosts.iter() {
+            let worker_guard = worker_host.read().await;
+            if worker_guard.active_connection_count() < min_connections {
+                min_connections = worker_guard.active_connection_count();
+                least_connected_worker = Some(worker_host.clone());
+            }
+        };
+        least_connected_worker.expect("No worker available")
+    }   
     fn current_strategy(&self) -> &str {
         "Least Connections Strategy"
     }

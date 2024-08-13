@@ -93,7 +93,7 @@ async fn forward_to_load_balancer(
 
             notify.notify_waiters();
             
-            load_balancer.write().await.monitor_and_switch().await;
+            load_balancer.read().await.monitor_and_switch().await;
 
             switch_flag.store(false, Ordering::SeqCst);
 

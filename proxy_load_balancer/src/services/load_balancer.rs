@@ -6,7 +6,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use crate::{
-    domain::LoadBalancerError, services::ConnectionGuard, 
+    domain::{LoadBalancerError, LoadBalancingStrategy, StrategyType}, services::ConnectionGuard, 
     utils::{LoadBalancingStrategyType, NotifyType, SwitchFlagType, WokerHostType}};
 
 use super::{LeastConnectionsStrategy, RoundRobinStrategy};
@@ -14,15 +14,15 @@ use super::{LeastConnectionsStrategy, RoundRobinStrategy};
 #[derive(Clone)]
 pub struct LoadBalancer {
     worker_hosts: Vec<WokerHostType>,
-    pub strategy: LoadBalancingStrategyType,
+    pub strategy: Arc<RwLock<StrategyType>>
 }
 
 
 impl LoadBalancer {
-    pub fn new(worker_hosts: Vec<WokerHostType>, strategy: LoadBalancingStrategyType) -> Self {
+    pub fn new(worker_hosts: Vec<WokerHostType>, working_strategy: LoadBalancingStrategyType) -> Self {
         LoadBalancer {
             worker_hosts,
-            strategy,
+            strategy: Arc::new(RwLock::new(StrategyType::new(working_strategy))),
         }
     }
 
@@ -37,7 +37,7 @@ impl LoadBalancer {
             notify.notified().await;
         }
         
-        let worker = { self.strategy.read().await.get_worker(self.worker_hosts.clone()).await.clone() };
+        let worker = { self.strategy.read().await.current_strategy.read().await.get_worker(self.worker_hosts.clone()).await.clone() };
 
         let (worker_name, mut worker_uri) = {
             let worker_guard = worker.read().await;
@@ -116,22 +116,35 @@ impl LoadBalancer {
     }
 
     #[tracing::instrument(name = "Monitor and switch strategy", skip_all)]
-    pub async fn monitor_and_switch(&mut self) {
-        let current_strategy = { 
-            self.strategy.read().await.current_strategy().to_owned()
+    pub async fn monitor_and_switch(&self) {
+        // Clone the current strategy to avoid holding the lock while performing operations
+        let strategy_clone = self.strategy.clone();
+    
+        let current_strategy = {
+            let strategy_guard = strategy_clone.read().await;
+            strategy_guard.get_current_strategy().await
         };
+    
         let high_load = self.is_high_load().await;
-        println!("Does my code even get here  what is my load -> {high_load}");
+        println!("Does my code even get here? What is my load -> {}", high_load);
+    
+        // Determine the new strategy
+        let new_strategy: Arc<RwLock<dyn LoadBalancingStrategy + Send + Sync>>;
+    
         if high_load && current_strategy == "Round Robin Strategy" {
-                let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
-                self.strategy = least_strategy;
-                tracing::info!("Switching to Least Connections strategy");
-        } else if current_strategy == "Least Connections Strategy" {
-                let round_robin = Arc::new(RwLock::new(RoundRobinStrategy::new()));
-                self.strategy = round_robin;
-                tracing::info!("Switching to Round Robin Strategy");
+            new_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
+            tracing::info!("Switching to Least Connections Strategy");
+        } else if !high_load && current_strategy == "Least Connections Strategy" {
+            new_strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
+            tracing::info!("Switching to Round Robin Strategy");
+        } else {
+            return;
         }
+
+        self.strategy.write().await.switch_strategy(new_strategy).await;
     }
+
+
     pub async fn is_high_load(&self) -> bool {
         let results = futures::future::join_all(
             self.worker_hosts.iter().map(|worker| async {

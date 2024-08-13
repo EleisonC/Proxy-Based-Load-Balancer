@@ -15,7 +15,7 @@ async fn main () {
         // ServerType::new("Server 4".to_string(), "http://127.0.0.1:5004".to_string()),
     ];
 
-    let init_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
+    let init_strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
     let app_load_balancer = Arc::new(RwLock::new(LoadBalancer::new(worker_hosts, init_strategy)));
 
     let app = Application::build(address, app_load_balancer).await.expect("Failed to build load balancer");

@@ -1,44 +1,52 @@
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::{atomic::Ordering, Arc}};
 use tokio::{net::TcpStream, sync::RwLock};
 use hyper::{body::Incoming,
     client::conn::http1::handshake, Request, Response, Uri};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
-use crate::{domain::LoadBalancerError,
-    utils::{LoadBalancingStrategyType, WokerHostType}};
+use crate::{
+    domain::{LoadBalancerError, LoadBalancingStrategy, StrategyType}, services::ConnectionGuard, 
+    utils::{LoadBalancingStrategyType, NotifyType, SwitchFlagType, WokerHostType}};
 
 use super::{LeastConnectionsStrategy, RoundRobinStrategy};
 
 #[derive(Clone)]
 pub struct LoadBalancer {
     worker_hosts: Vec<WokerHostType>,
-    pub strategy: LoadBalancingStrategyType,
+    pub strategy: Arc<RwLock<StrategyType>>
 }
 
 
 impl LoadBalancer {
-    pub fn new(worker_hosts: Vec<WokerHostType>, strategy: LoadBalancingStrategyType) -> Self {
+    pub fn new(worker_hosts: Vec<WokerHostType>, working_strategy: LoadBalancingStrategyType) -> Self {
         LoadBalancer {
             worker_hosts,
-            strategy,
+            strategy: Arc::new(RwLock::new(StrategyType::new(working_strategy))),
         }
     }
 
     #[tracing::instrument(name = "Forward Request", skip_all, err(Debug))]
-    pub async fn forward_request(&self, req: Request<Incoming>) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
-        let worker = { self.strategy.write().await.get_worker(self.worker_hosts.clone()).clone() };
+    pub async fn forward_request(&self,
+        req: Request<Incoming>,
+        switch_flag: SwitchFlagType,
+        notify: NotifyType
+    ) -> Result<Response<Full<Bytes>>, LoadBalancerError> {
 
-        let worker_name = { worker.lock().unwrap().name.clone() };
-        let mut worker_uri = { worker.lock().unwrap().address_ip.clone() };
+        while switch_flag.load(Ordering::SeqCst) {
+            notify.notified().await;
+        }
+        
+        let worker = { self.strategy.read().await.current_strategy.read().await.get_worker(self.worker_hosts.clone()).await.clone() };
+
+        let (worker_name, mut worker_uri) = {
+            let worker_guard = worker.read().await;
+            (worker_guard.name.clone(), worker_guard.address_ip.clone())
+        };
 
         tracing::info!("Forwarding request on {}", worker_name);
-        {
-            worker.lock().unwrap().add_connection() 
-        }
-        defer! {
-            worker.lock().unwrap().remove_connection()
-        }
+        
+        let _guard = ConnectionGuard::new(&worker).await;
         
         if let Some(path_and_query) = req.uri().path_and_query() {
             worker_uri.push_str(path_and_query.as_str());
@@ -104,20 +112,47 @@ impl LoadBalancer {
         }
         
         tracing::info!("Successfully forwarded the request. Done!!");
-        let number = { worker.lock().unwrap().active_connections };
-        println!("{worker_name}***has**{number}***Connections***");
         Ok(res_data)
     }
 
     #[tracing::instrument(name = "Monitor and switch strategy", skip_all)]
-    pub async fn monitor_and_switch(&mut self) {
-       if self.is_high_load(){
-            let least_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
-            self.strategy = least_strategy;
-            tracing::info!("Switching to Least Connections strategy");
-       }
+    pub async fn monitor_and_switch(&self) {
+        // Clone the current strategy to avoid holding the lock while performing operations
+        let strategy_clone = self.strategy.clone();
+    
+        let current_strategy = {
+            let strategy_guard = strategy_clone.read().await;
+            strategy_guard.get_current_strategy().await
+        };
+    
+        let high_load = self.is_high_load().await;
+        println!("Does my code even get here? What is my load -> {}", high_load);
+    
+        // Determine the new strategy
+        let new_strategy: Arc<RwLock<dyn LoadBalancingStrategy + Send + Sync>>;
+    
+        if high_load && current_strategy == "Round Robin Strategy" {
+            new_strategy = Arc::new(RwLock::new(LeastConnectionsStrategy::default()));
+            tracing::info!("Switching to Least Connections Strategy");
+        } else if !high_load && current_strategy == "Least Connections Strategy" {
+            new_strategy = Arc::new(RwLock::new(RoundRobinStrategy::new()));
+            tracing::info!("Switching to Round Robin Strategy");
+        } else {
+            return;
+        }
+
+        self.strategy.write().await.switch_strategy(new_strategy).await;
     }
-    pub fn is_high_load(&self) -> bool {
-        self.worker_hosts.iter().any(|worker| worker.lock().unwrap().active_connections >= 2)
+
+
+    pub async fn is_high_load(&self) -> bool {
+        let results = futures::future::join_all(
+            self.worker_hosts.iter().map(|worker| async {
+                let worker_guard = worker.read().await;
+                println!("number of connections here {}", worker_guard.active_connection_count());
+                worker_guard.active_connection_count() > 5
+            })
+        ).await;
+        results.into_iter().any(|result| result)
     }
 }

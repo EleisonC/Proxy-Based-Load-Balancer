@@ -8,7 +8,7 @@ Before proceeding, ensure that the necessary services are running.
 
 ### Prerequisites
 
-- Ensure the atleast the auth service is running
+- Ensure the the example servers are running in the example_servers file
 
 ### Build Steps
 
